@@ -1,0 +1,106 @@
+name: Build NeonCoast APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Find project and build Debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          find_project() {
+            local root="$1"
+            while IFS= read -r -d '' settings_file; do
+              local candidate
+              candidate="$(dirname "$settings_file")"
+              if [[ -f "$candidate/app/build.gradle.kts" || -f "$candidate/app/build.gradle" ]]; then
+                printf '%s\n' "$candidate"
+                return 0
+              fi
+            done < <(
+              find "$root" -type f \\
+                \( -name 'settings.gradle.kts' -o -name 'settings.gradle' \) \\
+                ! -path '*/.git/*' ! -path '*/.gradle/*' ! -path '*/build/*' \\
+                -print0
+            )
+            return 1
+          }
+
+          PROJECT_DIR="$(find_project "$GITHUB_WORKSPACE" || true)"
+
+          # If the repository contains the source project as a ZIP, extract it
+          # and search the extracted folders as well.
+          if [[ -z "$PROJECT_DIR" ]]; then
+            EXTRACT_ROOT="$RUNNER_TEMP/neoncoast-source"
+            mkdir -p "$EXTRACT_ROOT"
+            while IFS= read -r -d '' archive; do
+              archive_name="$(basename "$archive" .zip)"
+              destination="$EXTRACT_ROOT/$archive_name"
+              mkdir -p "$destination"
+              unzip -oq "$archive" -d "$destination"
+            done < <(
+              find "$GITHUB_WORKSPACE" -type f -iname '*.zip' \\
+                ! -path '*/.git/*' ! -path '*/.gradle/*' -print0
+            )
+            PROJECT_DIR="$(find_project "$EXTRACT_ROOT" || true)"
+          fi
+
+          if [[ -z "$PROJECT_DIR" ]]; then
+            echo 'ERROR: Could not locate the Android Gradle project.'
+            echo 'Expected settings.gradle(.kts) and app/build.gradle(.kts) in the same project folder.'
+            echo 'Files found near the repository root:'
+            find "$GITHUB_WORKSPACE" -maxdepth 5 -type f \\
+              \( -name 'settings.gradle*' -o -path '*/app/build.gradle*' \) -print || true
+            exit 1
+          fi
+
+          echo "Using Android project: $PROJECT_DIR"
+          cd "$PROJECT_DIR"
+          gradle --no-daemon --stacktrace assembleDebug
+
+          APK_PATH="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+          if [[ ! -f "$APK_PATH" ]]; then
+            echo "ERROR: Build finished but APK was not found at: $APK_PATH"
+            find "$PROJECT_DIR/app/build/outputs" -type f -name '*.apk' -print 2>/dev/null || true
+            exit 1
+          fi
+
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp "$APK_PATH" "$GITHUB_WORKSPACE/out/NeonCoast.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeonCoast-APK
+          path: out/NeonCoast.apk
+          if-no-files-found: error
+
