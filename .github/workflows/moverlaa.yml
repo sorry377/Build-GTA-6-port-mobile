@@ -1,12 +1,12 @@
-
 name: Overall AI APK Build
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
       - master
+  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,34 +16,46 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout source
+        uses: actions/checkout@v7
 
-      - name: Setup JDK 17
-        uses: actions/setup-java@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # v4 no longer requests the deprecated SDK package named "tools".
+      # packages: '' also prevents implicit SDK package installation here.
+      - name: Set up Android SDK command-line tools
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
 
-      - name: Install SDK
+      - name: Install required Android SDK packages
         run: |
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-36"
-          sdkmanager "build-tools;36.0.0"
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
+          sdkmanager --list_installed
 
-      - name: Grant permission
-        run: chmod +x gradlew
+      - name: Prepare Gradle wrapper
+        run: |
+          if [ ! -f ./gradlew ]; then
+            echo "::error::gradlew is missing. Add the Gradle wrapper files to the repository."
+            exit 1
+          fi
+          chmod +x ./gradlew
 
-      - name: Build APK
-        run: ./gradlew --no-daemon clean assembleDebug
+      - name: Build debug APK
+        run: ./gradlew --no-daemon --stacktrace clean :app:assembleDebug
 
-      - name: Upload APK
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: OverallAI-APK
+          name: OverallAI-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 14
           
