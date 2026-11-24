@@ -1,0 +1,91 @@
+name: Build NEXRA Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'RobloxExecutor.zip'
+      - 'build.yml'
+      - '.github/workflows/build.yml'
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: '17'
+  GRADLE_VERSION: '8.7'
+  ANDROID_API: '34'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Prepare project directory
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f "settings.gradle.kts" && -f "app/build.gradle.kts" ]]; then
+            PROJECT_DIR="."
+          elif [[ -f "RobloxExecutor/settings.gradle.kts" ]]; then
+            PROJECT_DIR="RobloxExecutor"
+          else
+            ZIP_FILE="${{ github.workspace }}/RobloxExecutor.zip"
+            if [[ ! -f "$ZIP_FILE" ]]; then
+              ZIP_FILE="$(find . -maxdepth 3 -type f -name '*.zip' -not -path './.git/*' | head -n 1 || true)"
+            fi
+            if [[ -z "$ZIP_FILE" || ! -f "$ZIP_FILE" ]]; then
+              echo "Could not find RobloxExecutor.zip or an Android Gradle project."
+              exit 1
+            fi
+            mkdir -p extracted
+            unzip -q -o "$ZIP_FILE" -d extracted
+            SETTINGS_FILE="$(find extracted -type f -name 'settings.gradle.kts' | head -n 1 || true)"
+            if [[ -z "$SETTINGS_FILE" ]]; then
+              echo "The ZIP does not contain settings.gradle.kts."
+              exit 1
+            fi
+            PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          fi
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "Using project: $PROJECT_DIR"
+
+      - name: Install Android build tools
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-${ANDROID_API}" "build-tools;34.0.0"
+
+      - name: Build debug APK
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: |
+          gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NEXRA-Local-Runtime-APK
+          path: ${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Print APK details
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: ls -lh app/build/outputs/apk/debug/*.apk
+        
